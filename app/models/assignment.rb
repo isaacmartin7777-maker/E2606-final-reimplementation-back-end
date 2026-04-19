@@ -2,6 +2,15 @@
 
 class Assignment < ApplicationRecord
   include MetricHelper
+  extend ImportableExportableHelper
+
+  attr_accessor :title, :description, :has_badge, :enable_pair_programming, :is_calibrated, :staggered_deadline,
+                :instructor_name, :course_name
+
+  mandatory_fields :name, :directory_path, :instructor_name
+  hidden_fields :id, :created_at, :updated_at, :instructor_id, :course_id
+  export_submodels false
+
   has_many :participants, class_name: 'AssignmentParticipant', foreign_key: 'parent_id', dependent: :destroy
   has_many :users, through: :participants, inverse_of: :assignment
   has_many :teams, class_name: 'AssignmentTeam', foreign_key: 'parent_id', dependent: :destroy, inverse_of: :assignment
@@ -17,11 +26,21 @@ class Assignment < ApplicationRecord
   belongs_to :course, optional: true
   belongs_to :instructor, class_name: 'User', inverse_of: :assignments
 
-  #This method return the value of the has_badge field for the given assignment object.
-  attr_accessor :title, :description, :has_badge, :enable_pair_programming, :is_calibrated, :staggered_deadline
+  before_validation :assign_import_references
+  validate :import_references_must_exist
 
   def review_questionnaire_id
     Questionnaire.find_by_assignment_id id
+  end
+
+  # Returns the imported instructor name when present, otherwise falls back to the associated instructor.
+  def instructor_name
+    @instructor_name.presence || instructor&.name
+  end
+
+  # Returns the imported course name when present, otherwise falls back to the associated course.
+  def course_name
+    @course_name.presence || course&.name
   end
 
   def teams?
@@ -145,6 +164,7 @@ class Assignment < ApplicationRecord
     enable_pair_programming
   end
   
+  # Returns the value of the has_badge field for the given assignment object.
   def has_badge?
     has_badge
   end
@@ -224,6 +244,27 @@ class Assignment < ApplicationRecord
       end
     end
     review_rounds
+  end
+
+  class << self
+    # Includes course_name in the import/export field list as a virtual CSV attribute.
+    def internal_fields
+      (super + ['course_name']).uniq
+    end
+  end
+
+  private
+
+  # Resolves human-readable CSV import fields into real associated records.
+  def assign_import_references
+    self.instructor = User.find_by(name: instructor_name) if instructor.blank? && instructor_name.present?
+    self.course = Course.find_by(name: course_name) if course.blank? && course_name.present?
+  end
+
+  # Adds validation errors when imported association names do not map to existing records.
+  def import_references_must_exist
+    errors.add(:instructor_name, 'could not be found') if instructor.blank? && instructor_name.present?
+    errors.add(:course_name, 'could not be found') if course.blank? && course_name.present?
   end
 
 end

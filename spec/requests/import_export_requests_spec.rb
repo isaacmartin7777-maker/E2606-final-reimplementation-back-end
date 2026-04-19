@@ -60,6 +60,17 @@ RSpec.describe "Import/export requests", type: :request do
         expect(json["mandatory_fields"]).not_to include("role_id", "institution_id")
         expect(json["external_fields"]).to include("role_name", "institution_name")
       end
+
+      it "returns assignment metadata with instructor_name and course_name" do
+        get "/import/Assignment"
+
+        expect(response).to have_http_status(:ok)
+
+        json = JSON.parse(response.body)
+        expect(json["mandatory_fields"]).to include("name", "directory_path", "instructor_name")
+        expect(json["optional_fields"]).to include("spec_location", "course_name")
+        expect(json["mandatory_fields"]).not_to include("instructor_id", "course_id")
+      end
     end
   end
 
@@ -184,6 +195,36 @@ RSpec.describe "Import/export requests", type: :request do
         expect(imported_user.role_id).to eq(student_role.id)
       end
     end
+
+    context "assignment imports" do
+      it "imports assignments using instructor_name and optional course_name" do
+        course = Course.create!(
+          name: "Assignment Import Course",
+          directory_path: "assignment_import_course",
+          info: "Course for assignment import",
+          instructor: instructor,
+          institution: institution
+        )
+        file = uploaded_csv("name,directory_path,spec_location,private,has_teams,course_name,instructor_name\nImported Assignment,imported_assignment,https://example.com/spec,true,true,Assignment Import Course,teacher\n")
+
+        post "/import/Assignment",
+             params: {
+               csv_file: file,
+               use_headers: true
+             }
+
+        expect(response).to have_http_status(:created)
+
+        imported_assignment = Assignment.find_by(name: "Imported Assignment")
+        expect(imported_assignment).to be_present
+        expect(imported_assignment.directory_path).to eq("imported_assignment")
+        expect(imported_assignment.spec_location).to eq("https://example.com/spec")
+        expect(imported_assignment.private).to eq(true)
+        expect(imported_assignment.has_teams).to eq(true)
+        expect(imported_assignment.instructor_id).to eq(instructor.id)
+        expect(imported_assignment.course_id).to eq(course.id)
+      end
+    end
   end
 
   describe "POST /export/:class" do
@@ -262,6 +303,41 @@ RSpec.describe "Import/export requests", type: :request do
         json = JSON.parse(response.body)
         expect(json["file"]).to include("topic_name,assignment_id")
         expect(json["file"]).to include("Export Topic")
+      end
+    end
+
+    context "assignment exports" do
+      it "exports assignments with instructor_name and course_name" do
+        course = Course.create!(
+          name: "Assignment Export Course",
+          directory_path: "assignment_export_course",
+          info: "Course for assignment export",
+          instructor: instructor,
+          institution: institution
+        )
+        exported_assignment = Assignment.create!(
+          name: "Exported Assignment",
+          directory_path: "exported_assignment",
+          spec_location: "https://example.com/export-spec",
+          private: true,
+          has_teams: true,
+          instructor: instructor,
+          course: course
+        )
+
+        post "/export/Assignment",
+             params: {
+               ordered_fields: %w[name directory_path spec_location private has_teams instructor_name course_name].to_json
+             }
+
+        expect(response).to have_http_status(:ok)
+
+        json = JSON.parse(response.body)
+        exported_file = Array(json["file"]).first || {}
+        contents = exported_file["contents"] || json["file"]
+
+        expect(contents).to include("name,directory_path,spec_location,private,has_teams,instructor_name,course_name")
+        expect(contents).to include("#{exported_assignment.name},#{exported_assignment.directory_path},#{exported_assignment.spec_location},true,true,#{instructor.name},#{course.name}")
       end
     end
   end
